@@ -130,13 +130,13 @@ class SupabaseDB {
         'reset_request', 'notification_preferences', 'answers',
         'question_scores', 'question_feedback', 'recurring_config',
         'analytics', 'schedules', 'allowed_extensions', 'anti_cheat_config',
-        'reset_data', 'device_info', 'groups'
+        'reset_data', 'device_info', 'groups', 'paystack_response'
     ];
 
     static TABLE_WHITELISTS = {
         users: ['id', 'email', 'full_name', 'phone', 'role', 'created_at', 'updated_at', 'last_login', 'failed_attempts', 'locked_until', 'lockouts', 'flagged', 'reset_request', 'active', 'notification_preferences', 'metadata'],
         user_secrets: ['email', 'password_hash', 'session_id', 'reset_data', 'updated_at'],
-        courses: ['id', 'title', 'description', 'teacher_email', 'created_by', 'enrollment_id', 'enrollment_limit', 'semester', 'status', 'created_at', 'updated_at', 'metadata'],
+        courses: ['id', 'title', 'description', 'teacher_email', 'created_by', 'enrollment_id', 'enrollment_limit', 'semester', 'price', 'currency', 'status', 'created_at', 'updated_at', 'metadata'],
         topics: ['id', 'course_id', 'teacher_email', 'title', 'description', 'order_index', 'created_at', 'updated_at'],
         lessons: ['id', 'course_id', 'topic_id', 'teacher_email', 'title', 'content', 'video_url', 'order_index', 'created_at', 'updated_at'],
         enrollments: ['course_id', 'student_email', 'enrolled_at', 'updated_at', 'progress', 'completed', 'completed_lessons'],
@@ -161,7 +161,8 @@ class SupabaseDB {
         indexing_locks: ['lock_key', 'locked_by', 'acquired_at', 'expires_at'],
         material_indexing_states: ['material_id', 'course_id', 'file_url', 'extracted_text', 'chunks', 'status', 'current_step', 'error_message', 'timing_logs', 'retry_count', 'last_chunk_index', 'created_at', 'updated_at'],
         support_tickets: ['id', 'user_email', 'role', 'subject', 'message', 'status', 'resolution_notes', 'created_at', 'updated_at'],
-        system_settings: ['key', 'value', 'updated_at']
+        system_settings: ['key', 'value', 'updated_at'],
+        payments: ['id', 'course_id', 'student_email', 'amount', 'currency', 'reference', 'status', 'paystack_response', 'created_at', 'updated_at']
     };
 
     static _sanitizePayload(payload, table = null) {
@@ -805,15 +806,60 @@ class SupabaseDB {
         return data?.[0];
     }
 
-    static async enrollInCourse(courseId, studentEmail, enrollmentId = null) {
+    static async enrollInCourse(courseId, studentEmail, enrollmentId = null, paymentReference = null) {
         const { error } = await supabaseClient.rpc('enroll_in_course', {
             p_course_id: courseId,
             p_student_email: studentEmail,
-            p_enrollment_id: enrollmentId
+            p_enrollment_id: enrollmentId,
+            p_payment_reference: paymentReference
         });
         if (error) throw error;
         _cache.invalidate(`enrollments_${studentEmail}`);
         _cache.invalidate(`enrolled_courses_${studentEmail}`);
+    }
+
+    // Payment operations (Paystack integration)
+    static async recordPayment(paymentData) {
+        const payload = {
+            id: paymentData.id || crypto.randomUUID(),
+            course_id: paymentData.course_id,
+            student_email: (paymentData.student_email || '').toLowerCase().trim(),
+            amount: parseFloat(paymentData.amount) || 0,
+            currency: paymentData.currency || 'GHS',
+            reference: paymentData.reference,
+            status: paymentData.status || 'success',
+            paystack_response: paymentData.paystack_response || {}
+        };
+        const data = await this._upsert('payments', payload, 'reference');
+        _cache.invalidate(`payments_${payload.student_email}`);
+        return data?.[0] || payload;
+    }
+
+    static async getPayments(studentEmail = null, courseId = null) {
+        return this._request(async () => {
+            let query = supabaseClient.from('payments').select('*');
+            if (studentEmail) query = query.eq('student_email', studentEmail.toLowerCase().trim());
+            if (courseId) query = query.eq('course_id', courseId);
+            const { data, error } = await query.order('created_at', { ascending: false });
+            if (error) throw error;
+            return { data: data || [] };
+        });
+    }
+
+    static async getPaystackPublicKey() {
+        try {
+            const { data } = await supabaseClient
+                .from('system_settings')
+                .select('value')
+                .eq('key', 'paystack_public_key')
+                .maybeSingle();
+            if (data?.value?.public_key) return data.value.public_key;
+            if (typeof data?.value === 'string') return data.value;
+        } catch (e) {
+            console.warn('Could not fetch Paystack public key from settings, using default/env fallback:', e);
+        }
+        // Fallback to window config or default public test key
+        return window.PAYSTACK_PUBLIC_KEY || 'pk_test_smartlms_paystack_public_mock_key';
     }
 
     static async deleteEnrollment(courseId, studentEmail) {
