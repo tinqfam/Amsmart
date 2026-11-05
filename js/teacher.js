@@ -151,6 +151,9 @@ async function renderCourses() {
         const limit = c.enrollment_limit;
         const limitDisplay = limit ? `${enrolledCount} / ${limit} Enrolled` : `${enrolledCount} Enrolled`;
         const isFull = limit && enrolledCount >= limit;
+        const priceVal = parseFloat(c.price) || 0;
+        const currencyVal = c.currency || 'GHS';
+        const priceDisplay = priceVal > 0 ? `${currencyVal} ${priceVal.toFixed(2)}` : 'Free';
 
         return `
         <div class="card">
@@ -160,6 +163,7 @@ async function renderCourses() {
             <div class="flex gap-5 flex-wrap">
                 <span class="badge ${c.status === 'published' ? 'badge-active' : 'badge-lock'}">${escapeHtml(c.status)}</span>
                 ${c.semester ? `<span class="badge badge-purple">${escapeHtml(c.semester)}</span>` : ''}
+                <span class="badge ${priceVal > 0 ? 'badge-purple' : 'badge-active'}" style="${priceVal > 0 ? 'background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe' : ''}">${escapeHtml(priceDisplay)}</span>
             </div>
             <span class="tiny bold ${isFull ? 'danger-text' : 'text-muted'}">${escapeHtml(limitDisplay)}</span>
           </div>
@@ -221,6 +225,18 @@ function showCourseForm(course = null) {
             <input type="number" id="courseEnrollmentLimit" placeholder="Max students" min="0" value="${isEdit ? (course.enrollment_limit || 0) : 0}">
           </div>
           <div>
+            <label>Price (0.00 for Free)</label>
+            <input type="number" id="coursePrice" placeholder="0.00" min="0" step="0.01" value="${isEdit && course.price !== undefined && course.price !== null ? course.price : '0.00'}">
+          </div>
+          <div>
+            <label>Currency</label>
+            <select id="courseCurrency">
+              <option value="GHS" ${isEdit && course.currency === 'GHS' ? 'selected' : ''}>GHS (Ghanaian Cedi)</option>
+              <option value="NGN" ${isEdit && course.currency === 'NGN' ? 'selected' : ''}>NGN (Nigerian Naira)</option>
+              <option value="USD" ${isEdit && course.currency === 'USD' ? 'selected' : ''}>USD (US Dollar)</option>
+            </select>
+          </div>
+          <div>
             <label>Semester</label>
             <input type="text" id="courseSemester" placeholder="e.g. Fall 2024" value="${isEdit ? escapeHtml(course.semester || '') : ''}">
           </div>
@@ -255,6 +271,9 @@ function showCourseForm(course = null) {
       const vTitle = Validator.required(title, 'Course title');
       if (!vTitle.valid) return UI.showNotification(vTitle.message, 'warn');
 
+      const rawPrice = parseFloat(document.getElementById('coursePrice')?.value) || 0;
+      const currency = document.getElementById('courseCurrency')?.value || 'GHS';
+
       const courseData = {
         id: courseId,
         title: title,
@@ -262,6 +281,8 @@ function showCourseForm(course = null) {
         semester: document.getElementById('courseSemester').value.trim() || null,
         enrollment_id: document.getElementById('courseEnrollmentId').value || null,
         enrollment_limit: parseInt(document.getElementById('courseEnrollmentLimit').value) || null,
+        price: Math.max(0, rawPrice),
+        currency: currency,
         status: document.getElementById('courseStatus').value,
         teacher_email: user.email,
         created_by: user.full_name,
